@@ -1,0 +1,2 @@
+The Rails directory needs to be copied into your <home_dir>/.jedit/macros directory. You will need to have the Ruby and SideKick JEdit plugins as well as the "ruby" executable for your platform visible in the "path". This macro has been tested on Windows and Linux (OS X users will have to settle for TextMate ;-) ).
+

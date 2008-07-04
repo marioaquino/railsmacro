@@ -1,0 +1,259 @@
+/**
+ * Rails - Open Related File
+ * This macro depends on the user having the SideKick plugin installed and having 
+ * ruby on the PATH to support the external call the macro makes to the Rails 
+ * inflector.rb (that is also included with the macro).  
+ * 
+ * @author Mario Aquino - http://marioaquino.blogspot.com - mario underscore aquino at yahoo d0t com
+ * v1.0  (10/26/2006)
+ * v1.1  (11/27/2006) - Filter contents of views directory to include only .rhtml & .rjs files
+ * v1.2  (07/04/2008) - Added .erb, .builder, & .haml view file extensions. Also added support for jumping to specs for
+ *						model, controller, and helper specs from the corresponding classes under test.  However, jumping
+ *						back to the class under test from the spec doesn't seem to be working.
+ *
+ */
+import sidekick.*;
+
+baseDir = "";
+baseName = "";
+parentDirName = "";
+pluralized = "";
+singularized = "";
+singularizedParentDirName = "";
+inflectTime = "";
+//Add any other file extensions used in your views here
+viewFileExtensions = new String[] { ".rhtml", ".rjs", ".erb", ".builder", ".haml" };
+
+//Depends on the SideKick & Ruby plugins...
+String getAssetName() {
+    SideKickParsedData data = SideKickParsedData.getParsedData(view);
+    if(data == null) {
+        return "";
+    }
+
+    JEditTextArea textArea = view.getTextArea();
+    IAsset asset = data.getAssetAtOffset(textArea.getCaretPosition());
+
+    if(asset == null || asset.getEnd() == null) {
+        return "";
+    }
+    return asset.getName();
+}
+
+String[] inflect(actions, nouns) {
+    ArrayList commands = new ArrayList();
+    commands.add("ruby");
+    //scriptPath is special Macros variable that jEdit makes available
+    commands.add(new File(scriptPath).getParent() + File.separator + "inflector.rb");
+    for (i = 0; i < actions.length; i++) {
+        commands.add(actions[i]);
+        commands.add(nouns[i]);
+    }
+    ProcessBuilder builder = new ProcessBuilder(commands);
+    start = System.currentTimeMillis();
+    Process process = builder.start();
+    InputStream is = process.getInputStream();
+    InputStreamReader isr = new InputStreamReader(is);
+    BufferedReader br = new BufferedReader(isr);
+    String line;
+    String[] results = new String[actions.length];
+    i = 0;
+    while ((line = br.readLine()) != null) {
+        results[i] = line;
+        i++;
+    }
+    process.waitFor();
+    end = System.currentTimeMillis();
+    inflectTime = " (Inflected in " + new Long(end - start).toString() + " milliseconds)";
+    return results;
+}
+
+JMenuItem newMenuItem(String optionText, String path) {
+    respond = new ActionListener() {
+        actionPerformed( event ) {
+            jEdit.openFile(view, path);
+        }
+    };
+    menuItem = new JMenuItem("Go to " + optionText);
+    menuItem.addActionListener(respond);
+    menuItem.setToolTipText(path + inflectTime);
+    return menuItem;
+}
+
+void addMenuOption(JPopupMenu menu, String optionText, String path) {
+    menu.add(newMenuItem(optionText, path));
+}
+
+boolean valid(path) {
+    return new File(path).exists();
+}
+
+String withSeparator(path) {
+    return path.endsWith(File.separator) ? path : path + File.separator;
+}
+
+String getPath(prefix, suffix) {
+    prefix = withSeparator(prefix);
+    path = prefix + baseName + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //pluralized (needed to find non-views from models)
+    path = prefix + pluralized + suffix;
+    if (valid(path)) {
+        return path;
+    } 
+    //singularized (needed to find models from non-views)
+    path = prefix + singularized + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //strip the pluralized ending directory name to reach the singularized model (from a view)
+    prefixFile = new File(prefix);
+    fromViewPrefix = withSeparator(prefixFile.getParent());
+    path = fromViewPrefix + singularizedParentDirName + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //for getting to everything from views (.rhtml files)
+    path = fromViewPrefix + parentDirName + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //for getting to layouts from pluralized (non-model) files
+    path = fromViewPrefix + baseName + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //from a layout to a model
+    path = fromViewPrefix + singularized + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    //from a model to a layout
+    path = fromViewPrefix + pluralized + suffix;
+    if (valid(path)) {
+        return path;
+    }
+    // Macros.error(view, "(in getPath()) prefix: " + prefix + " suffix: " + suffix + 
+        // " baseName: " + baseName);
+    return "";
+}
+
+String getBaseDir(targetDir) {
+    dir = new File(buffer.getPath()).getParent();
+    String[] replaceDirs = new String[] { "controllers", "helpers", "models", "views", "unit",
+        "functional", "fixtures" };
+    for( i = 0; i < replaceDirs.length; i++) {
+        dir = dir.replaceAll(replaceDirs[i], targetDir);
+    }
+    return dir;
+}
+
+boolean addPathToTarget(menu, targetDir, title, extension) {
+    baseDir = getBaseDir(targetDir).replaceAll("test", "app");
+    bufferName = buffer.getName();
+    //Don't add a file separator for view files (*.rhtml or *.rjs)
+    if (bufferName.endsWith(".rb") || bufferName.endsWith(".yml")) {
+        baseDir = baseDir + File.separator;
+    }
+    path = getPath(baseDir, extension);
+    if (path.length() > 0) {
+        addMenuOption(menu, title, path);
+        return true;
+    }
+    return false;
+}
+
+void addPathToViewTarget(menu, targetDir, title, fileExtension) {
+    extension = File.separator + getAssetName() + fileExtension; 
+    //if the cursor in the current buffer isn't within a view-related asset (method)...
+    //IOW, if the cursor isn't within a controller method that has a corresponding .rhtml...
+    if (!addPathToTarget(menu, targetDir, title, extension)) {
+        //use of baseDir here depends on addsPathToTarget() having defined it
+        viewDir = new File(baseDir + pluralized);
+        //if the baseName was already plural, the pluralized value is actually singular (bug in inflector?)
+        viewDir = viewDir.exists() ? viewDir : new File(baseDir + baseName);
+        viewDir = viewDir.exists() ? viewDir : new File(baseDir.replaceAll("layouts", baseName));
+        if (viewDir.exists()) {
+            JMenu submenu = new JMenu("Views");
+            filter = new FileFilter() {
+                boolean accept( pathName ) {
+                    for(i = 0; i < viewFileExtensions.length; i++) {
+                        if (pathName.getName().endsWith(viewFileExtensions[i])) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            };
+            viewFiles = viewDir.listFiles(filter);
+            for(i = 0; i < viewFiles.length; i++) {
+                viewFile = viewFiles[i];
+                submenu.add(newMenuItem(viewFile.getName(), viewFile.getPath()));
+            }
+            if (submenu.getItemCount() > 0) {
+                menu.add(submenu);
+            }
+        }
+    }
+}
+
+void addPathToTestingTarget(menu, targetDir, title, extension, testDirName) {
+    baseDir = getBaseDir(targetDir).replaceAll("app", testDirName);
+    path = getPath(baseDir, extension);
+    if (path.length() > 0) {
+        addMenuOption(menu, title, path);
+    }
+}
+
+void addPathToTestTarget(menu, targetDir, title, extension) {
+	addPathToTestingTarget(menu, targetDir, title, extension, "test");
+}
+
+void addPathToSpecTarget(menu, targetDir, title, extension) {
+	addPathToTestingTarget(menu, targetDir, title, extension, "spec");
+}
+
+void setupInflections() {
+    baseName = buffer.getName().replaceAll("_[a-z_]*\\.rb", "")
+        .replaceAll("\\.rb", "")
+        .replaceAll("/[a-z]*\\.rhtml", "")
+        .replaceAll("\\.rhtml", "")
+        .replaceAll("\\.yml", "");
+    parentDirName = new File(buffer.getPath()).getParentFile().getName();
+    inflections = inflect(new String[] { "pluralize", "singularize", "singularize" }, 
+        new String[] { baseName, baseName, parentDirName });
+    pluralized = inflections[0];
+    singularized = inflections[1];
+    singularizedParentDirName = inflections[2];
+}
+
+void showOptions() {
+    if (buffer.getPath() != null) {
+        
+        setupInflections();
+        
+        JPopupMenu menu = new JPopupMenu();
+        addPathToTarget(menu, "controllers", "Controller", "_controller.rb");
+        addPathToTarget(menu, "models", "Model", ".rb");
+        addPathToTarget(menu, "helpers", "Helper", "_helper.rb");
+        addPathToTarget(menu, "views/layouts", "Layout", ".rhtml");
+        addPathToViewTarget(menu, "views", "View", ".rhtml");
+        addPathToTestTarget(menu, "unit", "Unit Test", "_test.rb");
+        addPathToTestTarget(menu, "functional", "Functional Test", "_controller_test.rb");
+        addPathToTestTarget(menu, "fixtures", "Test Fixture", ".yml");
+        addPathToSpecTarget(menu, "models", "Model Spec", "_spec.rb");
+        addPathToSpecTarget(menu, "controllers", "Controller Spec", "_controller_spec.rb");
+        addPathToSpecTarget(menu, "helpers", "Helper Spec", "_helper_spec.rb");
+        addPathToSpecTarget(menu, "fixtures", "Spec Fixture", ".yml");
+        
+        if (menu.getSubElements().length > 0) {
+            ta = view.getTextArea();
+            point = ta.getLocationOnScreen();
+            GUIUtilities.showPopupMenu(menu, view, (int)point.getX() + 50, (int)point.getY() + 125);
+        }
+    }
+}
+
+showOptions();
